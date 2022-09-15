@@ -1,0 +1,385 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(devtools)
+devtools::install_github("jlmelville/snedata", force=TRUE)
+library(snedata)
+dat<- snedata::download_fashion_mnist()
+dim(dat)
+```
+
+```{r}
+# For the initial experiments, pick 
+# 1000 points as training data 
+set.seed(1) 
+train<-sample(70000,1000)
+
+# training data
+x.train<-dat[train,1:784] 
+y.train<-dat[train,785] 
+table(y.train)
+```
+
+
+```{r}
+# types of objects to classify here
+types<-dat[train,786] 
+table(types)
+
+```
+
+```{r}
+# look at one of the clothing articles
+types[1] 
+x<-matrix(as.numeric(x.train[1,]),nrow=28) 
+image(x[,28:1])
+
+# look at another clothing article
+types[2] 
+x<-matrix(as.numeric(x.train[2,]),nrow=28) 
+image(x[,28:1])
+
+```
+
+```{r}
+# testing data
+ind<-1:70000 
+test<-sample(ind[-train],1000) 
+x.test<-dat[test,1:784] 
+y.test<-dat[test,785] 
+table(y.test)
+```
+
+```{r}
+set.seed(2)
+# first apply PCA to the training data to find the transformation 
+# into a lower dimensional space 
+pca.train<-prcomp(x.train,center=TRUE,scale.=FALSE)
+
+# how many dimensions do we need to explain
+# 90% of the total variation in the data? 
+var.explained<-cumsum(pca.train$sdev^2)/sum(pca.train$sdev^2) 
+pca.dim<-min(which(var.explained > 0.90))
+pca.dim
+
+```
+
+```{r}
+# lower dimensional data
+x.pca.train<-pca.train$x[,1:pca.dim] 
+dim(x.pca.train)
+```
+
+
+
+```{r}
+# from SVD
+proj.train<-pca.train$rotation[,1:pca.dim] 
+x.centered<-scale(x.train,center=TRUE,scale=FALSE) 
+table(x.pca.train == x.centered%*%proj.train)
+
+```
+
+```{r}
+# look at pairs of PC's, with data colored 
+# by class label 
+pairs(x.pca.train[,1:5],col=y.train)
+
+```
+
+```{r}
+# apply the SAME centering and projection to the test data
+cc<-colMeans(x.train)
+x.centered<-sweep(x.test,2,cc) 
+x.pca.test<-as.matrix(x.centered)%*% (pca.train$rotation) 
+x.pca.test<-x.pca.test[,1:pca.dim]
+dim(x.pca.test)
+# What dimension did we embed into?
+```
+
+```{r}
+# knn on the 784-dimensional data
+library(caret)
+set.seed(3)
+dat.train=data.frame(x=x.train, y=as.factor(y.train))
+```
+
+```{r}
+
+# Training K-NN using repeated 5-fold CV
+# possible hyperparameter choices are K=1,3,5,7,9,11 
+rt <- proc.time()
+knn_5CV <- train(y~ .,
+                    # running time
+                    data=dat.train,
+                    method = "knn",
+                    tuneGrid = expand.grid(k=c(1,3,5,7,9,11)), 
+                    trControl=trainControl(method='repeatedcv',
+                                          number=5, repeats=10))
+proc.time()-rt
+
+```
+```{r}
+knn_5CV
+```
+
+
+```{r}
+# Repeat the above with repeated 10-fold CV. How does the running
+# time compare?  Why is this reasonable?
+rt <- proc.time()
+knn_10CV <- train(y~ .,
+                    # running time
+                    data=dat.train,
+                    method = "knn",
+                    tuneGrid = expand.grid(k=c(1,3,5,7,9,11)), 
+                    trControl=trainControl(method='repeatedcv',
+                                          number=10, repeats=10))
+proc.time()-rt
+```
+
+```{r}
+knn_10CV
+```
+
+```{r}
+# knn on the reduced dimension data obtained via PCA
+dat.pca.train=data.frame(x=x.pca.train, y=as.factor(y.train))
+```
+
+
+```{r}
+# Training K-NN using repeated 5-fold CV
+# possible hyperparameter choices are K=1,3,5,7,9,11 
+rt <- proc.time()
+knn_5CV_pca <- train(y~ .,
+                        data=dat.pca.train,
+                        method = "knn",
+                        tuneGrid = expand.grid(k=c(1,3,5,7,9,11)),
+                        trControl=trainControl(method='repeatedcv',
+                                               number=5, repeats=10))
+# running time
+proc.time()-rt
+```
+
+```{r}
+knn_5CV_pca$results
+knn_5CV_pca
+```
+
+```{r}
+# Run repeated CV knn on the PCA'd data with 10-fold CV.
+# How does the running time compare?  Why is this reasonable?
+rt <- proc.time()
+knn_10CV_pca <- train(y~ .,
+                        data=dat.pca.train,
+                        method = "knn",
+                        tuneGrid = expand.grid(k=c(1,3,5,7,9,11)),
+                        trControl=trainControl(method='repeatedcv',
+                                               number=10, repeats=10))
+# running time
+proc.time()-rt
+```
+
+```{r}
+knn_10CV_pca$results
+knn_10CV_pca
+```
+
+```{r}
+
+# MUCH faster on PCA'd data, what about accuracy? 
+# unprojected data 
+colnames(x.test)<-colnames(dat.train)[1:784] 
+y.pred<-predict(knn_5CV, newdata=x.test)
+
+```
+
+```{r}
+# where are the errors occuring?
+table(y.pred,y.test)
+```
+
+```{r}
+# remember, the labels are given by
+table(dat[,785],dat[,786]) 
+
+```
+
+```{r}
+# accuracy
+sum(y.pred==y.test)/1000
+
+```
+
+```{r}
+# projected data
+colnames(x.pca.test)<-colnames(dat.pca.train)[1:pca.dim] 
+y.pred.pca<-predict(knn_5CV_pca, newdata=x.pca.test)
+
+```
+
+```{r}
+# where are the errors occuring?
+table(y.pred.pca,y.test)
+```
+
+```{r}
+# accuracy
+sum(y.pred.pca==y.test)/1000
+
+```
+
+```{r}
+# Was there a significant loss in accuracy here?
+# Compute the accuracy estimated by 10-fold CV as well.  How does
+# it compare to the estimated 5-fold CV accuracy?
+colnames(x.test)<-colnames(dat.train)[1:784] 
+y.pred<-predict(knn_10CV, newdata=x.test)
+table(y.pred,y.test)
+sum(y.pred==y.test)/1000
+
+```
+
+```{r}
+#knn_10CV_pca
+colnames(x.pca.test)<-colnames(dat.pca.train)[1:pca.dim] 
+y.pred.pca<-predict(knn_10CV_pca, newdata=x.pca.test)
+sum(y.pred.pca==y.test)/1000
+```
+
+```{r}
+#  We saw how to use the CV to choose our model parameter k above.
+#  Often, a good figure can do wonders for explaining this!
+# plot the predicted test accuracy  here
+plot(knn_5CV) 
+plot(knn_5CV_pca)
+
+# Q: What are these predicted accuracies estimating?
+# Q: More generally, what is cross validation estimating?
+
+```
+
+```{r}
+# Produce plotted accuracies for the 10-fold CV as well.  How
+# does the estimated optimal k differ across the 4 scenarios (5-fold
+# and 10-fold on the full data and the PCA'd data).
+plot(knn_10CV) 
+plot(knn_10CV_pca)
+
+```
+
+
+
+```{r}
+set.seed(4)
+# First we use linear SVM
+# Costs (C) considered
+cgrid<-0:10
+# 0 cost causes trouble sometimes... why?
+cgrid[1]<-0.01
+svm_linear <- train(
+    y~., data = dat.pca.train, method = "svmLinear", 
+    trControl = trainControl(method='repeatedcv',
+                              number=5, repeats=10), 
+    tuneGrid = expand.grid(C = cgrid)
+)
+svm_linear 
+plot(svm_linear)
+
+```
+
+
+```{r}
+# How well does it do?
+y.pred <- predict(svm_linear, newdata=x.pca.test)
+sum(y.pred==y.test)/1000
+
+```
+
+```{r}
+# Next consider radial kernel SVM.
+# Be patient, this could take a while...
+# Q: How many models need to be fit for 5-fold CV # with 10 repeats here?
+grid <- expand.grid(sigma = c(0.01, 0.1, 0.5,1,2),
+                              C = cgrid[1:5])
+grid
+
+```
+
+
+```{r}
+# In practice, we would grid finer than this. Ideally,
+# something like
+# grid <- expand.grid(sigma = seq(0.01, 2, length = 20),
+#                    C = seq(0.01, 10, length = 100))
+# but then each CV would take a long time...
+
+# To run the radial basis SVM (which you should name
+# svm_radial), you use the same syntax as the command
+# to run the linear SVM with two key changes
+# method = "svmRadial"
+# tuneGrid = grid
+
+svm_radial <- train(
+    y~., data = dat.pca.train, method = "svmRadial", 
+    trControl = trainControl(method='repeatedcv',
+                              number=5, repeats=10), 
+    tuneGrid = grid
+)
+# You can find the estimated best tuning parameters via
+svm_radial$bestTune 
+plot(svm_radial)
+
+```
+
+```{r}
+svm_radial
+```
+```{r}
+# How well does it do?
+y.pred <- predict(svm_radial, newdata=x.pca.test)
+sum(y.pred==y.test)/1000
+```
+
+
+```{r}
+library(MASS)
+# To run lda here, your data is
+# y=y and
+# X = dat.pca.train
+# For data (X,y), your command would then look like 
+# lda.fit = lda(y~., data= X)
+y <- 
+X <- dat.pca.train
+
+lda.fit = lda(y~., data= X)
+# Run lda (using the above hints) and predict the 
+# labels on the test set via
+
+lda.pred=predict(lda.fit, data.frame(x.pca.test)) 
+lda.class=lda.pred$class
+
+# Where do the errors occur?
+table(lda.class,y.test)
+
+# Performance?
+sum(lda.class==y.test)/1000
+```
+
+```{r}
+
+```
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
